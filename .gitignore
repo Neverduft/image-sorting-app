@@ -1,1 +1,3 @@
 images/*
+.vscode/settings.json
+test.py

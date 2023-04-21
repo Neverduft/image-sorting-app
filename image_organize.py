@@ -69,7 +69,7 @@ def get_bottom_position(column_frames):
 # Handle the release of an image frame during drag-and-drop
 def on_drag_release(event, columns, canvas):
     widget = event.widget
-    target_column_index = widget.winfo_x() // 210
+    target_column_index = (widget.winfo_x() + widget.winfo_width() // 2) // 210
     if 0 <= target_column_index < len(columns):
         source_column = None
         source_index = None
@@ -81,14 +81,24 @@ def on_drag_release(event, columns, canvas):
                     break
             if source_column:
                 break
-        if source_column is not None:
-            source_column.remove((img_name, widget))
 
+        if source_column is not None:
             # Find the source_column_index
             for idx, column in enumerate(columns):
                 if column == source_column:
                     source_column_index = idx
                     break
+
+            if source_column_index == target_column_index:
+                canvas.create_window(
+                    210 * source_column_index,
+                    (210 * source_index + source_index * 10) + 50 * (source_index + 1),
+                    window=widget,
+                    anchor="nw",
+                )
+                return
+
+            source_column.remove((img_name, widget))
 
             # Move up images in the source column to close the gap
             for idx, (_, frame) in enumerate(
@@ -171,14 +181,34 @@ def resize_and_crop(image, size):
 
 # Delete an image frame from the canvas TODO make this move the images and fix bug when dragging fter scroll
 def delete_image(image_frame, columns, canvas):
+    source_column = None
+    source_index = None
     for column in columns:
-        for img_name, frame in column:
+        for idx, (img_name, frame) in enumerate(column):
             if frame == image_frame:
-                column.remove((img_name, frame))
+                source_column = column
+                source_index = idx
                 break
+        if source_column:
+            break
 
-    image_frame.destroy()
-    update_canvas_scrollregion(columns, canvas)
+    if source_column:
+        source_column.remove((img_name, image_frame))
+
+        # Move up images in the source column to close the gap
+        for idx, (_, frame) in enumerate(
+            source_column[source_index:], start=source_index
+        ):
+            canvas.create_window(
+                210 * columns.index(source_column),
+                (210 * idx + idx * 10) + 50 * (idx + 1),
+                window=frame,
+                anchor="nw",
+            )
+
+        image_frame.destroy()
+        update_canvas_scrollregion(columns, canvas)
+
 
 
 # Enlarge an image in a separate window
