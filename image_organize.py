@@ -1,7 +1,9 @@
 from tkinter import *
 from tkinter import filedialog
 from PIL import Image, ImageTk
+from tkinter import Entry
 import os
+import shutil
 
 
 # Load images from a directory
@@ -20,6 +22,7 @@ def load_images(path):
 # Create columns of image frames from a list of image directories
 def create_image_columns(canvas, image_dirs, max_width=200, padding=10):
     columns = []
+    entries = []  # Store the Entry widgets in a list
     for path in image_dirs:
         images = load_images(path)
         column_frames = []
@@ -38,7 +41,18 @@ def create_image_columns(canvas, image_dirs, max_width=200, padding=10):
             img_label.pack()
             column_frames.append((img_name, frame))
         columns.append(column_frames)
+
+        # Create an Entry widget for each column and add it to the entries list
+        entry = create_column_entry(canvas, len(columns) - 1)
+        entries.append(entry)
+
     return columns
+
+
+def create_column_entry(canvas, column_index):
+    entry = Entry(canvas, width=25)
+    canvas.create_window(column_index * 210 + 20, 10, window=entry, anchor="nw")
+    return entry
 
 
 # Handle the start of a drag-and-drop operation
@@ -58,18 +72,22 @@ def on_drag(event):
 
 # Get the bottom position of the last image in a column
 def get_bottom_position(column_frames):
-    max_y = 0
-    for _, frame in column_frames:
-        y = frame.winfo_y()
-        if y > max_y:
-            max_y = y
-    return max_y + 210
+    if not column_frames:
+        return 50
+    last_frame_idx = len(column_frames)
+    bottom_y = last_frame_idx * (210 + 50) + last_frame_idx * 10
+    return bottom_y
 
 
 # Handle the release of an image frame during drag-and-drop
-def on_drag_release(event, columns, canvas):
+def on_drag_release(event, columns, canvas, image_dirs):
     widget = event.widget
-    target_column_index = (widget.winfo_x() + widget.winfo_width() // 2) // 210
+    scroll_x, scroll_y = canvas.canvasx(0), canvas.canvasy(0)
+    scroll_x = int(scroll_x)
+    scroll_y = int(scroll_y)
+    target_column_index = (
+        widget.winfo_x() + scroll_x + widget.winfo_width() // 2
+    ) // 210
     if 0 <= target_column_index < len(columns):
         source_column = None
         source_index = None
@@ -91,7 +109,7 @@ def on_drag_release(event, columns, canvas):
 
             if source_column_index == target_column_index:
                 canvas.create_window(
-                    210 * source_column_index,
+                    210 * source_column_index + scroll_x,
                     (210 * source_index + source_index * 10) + 50 * (source_index + 1),
                     window=widget,
                     anchor="nw",
@@ -105,7 +123,7 @@ def on_drag_release(event, columns, canvas):
                 source_column[source_index:], start=source_index
             ):
                 canvas.create_window(
-                    210 * source_column_index,
+                    210 * source_column_index + scroll_x,
                     (210 * idx + idx * 10) + 50 * (idx + 1),
                     window=frame,
                     anchor="nw",
@@ -115,7 +133,7 @@ def on_drag_release(event, columns, canvas):
         insert_position = None
         if not target_column:  # empty column
             insert_position = 0
-            target_y = 50
+            target_y = get_bottom_position(target_column)
         else:
             target_y = (
                 get_bottom_position(target_column) + 50
@@ -124,7 +142,7 @@ def on_drag_release(event, columns, canvas):
 
         widget.place_forget()
         canvas.create_window(
-            210 * target_column_index, target_y, window=widget, anchor="nw"
+            210 * target_column_index + scroll_x, target_y, window=widget, anchor="nw"
         )
 
         target_column.insert(
@@ -137,24 +155,39 @@ def on_drag_release(event, columns, canvas):
             target_column[insert_position + 1 :], start=insert_position + 1
         ):
             canvas.create_window(
-                210 * target_column_index,
-                (210 * idx + idx * 10) + 50,
+                210 * target_column_index + scroll_x,
+                (210 * idx + idx * 10) + 50 * (idx + 1) - scroll_y,
                 window=frame,
                 anchor="nw",
             )
+
+    # Move the image file in the file system
+    src_img_path = os.path.join(image_dirs[source_column_index], img_name)
+    dest_img_path = os.path.join(image_dirs[target_column_index], img_name)
+    shutil.move(src_img_path, dest_img_path)
 
     update_canvas_scrollregion(columns, canvas)
 
 
 # Bind drag-and-drop events to an image frame
-def bind_drag_and_drop(widget, canvas, columns):
+def bind_drag_and_drop(widget, canvas, columns, image_dirs):
     widget.canvas = canvas
     widget.drag_data = {}
     widget.bind("<ButtonPress-1>", on_drag_start)
     widget.bind("<B1-Motion>", on_drag)
     widget.bind(
-        "<ButtonRelease-1>", lambda event: on_drag_release(event, columns, canvas)
+        "<ButtonRelease-1>",
+        lambda event: on_drag_release(event, columns, canvas, image_dirs),
     )
+
+    widget.bind("<MouseWheel>", lambda event: forward_scroll_event(event, canvas))
+    widget.bind("<Button-4>", lambda event: forward_scroll_event(event, canvas))
+    widget.bind("<Button-5>", lambda event: forward_scroll_event(event, canvas))
+
+    for child in widget.winfo_children():
+        child.bind("<MouseWheel>", lambda event: forward_scroll_event(event, canvas))
+        child.bind("<Button-4>", lambda event: forward_scroll_event(event, canvas))
+        child.bind("<Button-5>", lambda event: forward_scroll_event(event, canvas))
 
 
 def resize_and_crop(image, size):
@@ -179,8 +212,8 @@ def resize_and_crop(image, size):
     return image.crop((left, top, right, bottom))
 
 
-# Delete an image frame from the canvas TODO make this move the images and fix bug when dragging fter scroll
-def delete_image(image_frame, columns, canvas):
+# Delete an image frame from the canvas
+def delete_image(image_frame, columns, canvas, image_dirs):
     source_column = None
     source_index = None
     for column in columns:
@@ -195,6 +228,10 @@ def delete_image(image_frame, columns, canvas):
     if source_column:
         source_column.remove((img_name, image_frame))
 
+        # Remove the image file from the file system
+        img_path = os.path.join(image_dirs[columns.index(source_column)], img_name)
+        os.remove(img_path)
+
         # Move up images in the source column to close the gap
         for idx, (_, frame) in enumerate(
             source_column[source_index:], start=source_index
@@ -208,7 +245,6 @@ def delete_image(image_frame, columns, canvas):
 
         image_frame.destroy()
         update_canvas_scrollregion(columns, canvas)
-
 
 
 # Enlarge an image in a separate window
@@ -232,25 +268,46 @@ def update_canvas_scrollregion(columns, canvas):
     canvas.configure(scrollregion=(0, 0, max_x, max_y + (210 * len(columns))))
 
 
+def on_mouse_wheel(event, canvas):
+    if event.delta:
+        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+    else:
+        if event.num == 4:
+            canvas.yview_scroll(-1, "units")
+        elif event.num == 5:
+            canvas.yview_scroll(1, "units")
+
+
+def forward_scroll_event(event, canvas):
+    canvas.event_generate(
+        "<MouseWheel>", delta=event.delta, x=event.x_root, y=event.y_root
+    )
+
+
 # Main function
 def main():
     image_dirs = [
         "images/1",
         "images/2",
         "images/3",
+        "images/4",
+        "images/5",
     ]
 
     # Create the main window and set its title and size
     root = Tk()
     root.title("Image Organizer")
-    root.geometry("800x800")
+    root.geometry("1150x800")
     root.resizable(False, False)
 
     container = Frame(root)
     container.pack(side="left", fill="both", expand=True)
 
     # Create a canvas and scrollbar for smooth scrolling through the images
-    canvas = Canvas(container, bg="white", width=800, height=800)
+    canvas = Canvas(container, bg="white", width=1150, height=800)
+    canvas.bind("<MouseWheel>", lambda event: on_mouse_wheel(event, canvas))
+    canvas.bind("<Button-4>", lambda event: on_mouse_wheel(event, canvas))
+    canvas.bind("<Button-5>", lambda event: on_mouse_wheel(event, canvas))
     scrollbar = Scrollbar(container, orient="vertical", command=canvas.yview)
     canvas.configure(yscrollcommand=scrollbar.set)
     columns = create_image_columns(canvas, image_dirs)
@@ -263,16 +320,16 @@ def main():
 
     # Draw black lines separating the columns
     for i in range(1, len(columns)):
-        canvas.create_line(i * 210, 0, i * 210, 10000, fill="black", width=2)
+        canvas.create_line(i * 210, 0, i * 210, 10000, fill="black", width=3)
 
     # Place the image frames in the canvas_frame and add drag-and-drop and delete/enlarge functionality
     for i, column in enumerate(columns):
         for j, (img_name, frame) in enumerate(column):
-            bind_drag_and_drop(frame, canvas, columns)
+            bind_drag_and_drop(frame, canvas, columns, image_dirs)
             delete_button = Button(
                 frame,
                 text="X",
-                command=lambda f=frame: delete_image(f, columns, canvas),
+                command=lambda f=frame: delete_image(f, columns, canvas, image_dirs),
             )
             delete_button.pack(side="left", padx=5)
             enlarge_button = Button(
@@ -284,7 +341,10 @@ def main():
             )
             enlarge_button.pack(side="left", padx=5)
             canvas.create_window(
-                i * 210, 50 + j * (210 + 50) + j * 10, window=frame, anchor="nw"
+                i * 210,
+                j * (210 + 50) + j * 10 + 40 + 10,
+                window=frame,
+                anchor="nw",  # Add 40 to account for the text field
             )
 
     update_canvas_scrollregion(columns, canvas)
